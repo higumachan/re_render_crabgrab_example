@@ -37,7 +37,7 @@ use once_cell::sync::Lazy;
 mod framework;
 
 struct Frame {
-    frame_bitmap: FrameBitmapBgraUnorm8x4,
+    frame_texture: metal::Texture,
     frame_id: u64,
 }
 
@@ -55,6 +55,72 @@ impl framework::Example for Render2D {
     }
 
     fn new(re_ctx: &re_renderer::RenderContext) -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+
+        runtime.spawn(async {
+            let token = match CaptureStream::test_access(false) {
+                Some(token) => token,
+                None => CaptureStream::request_access(false).await.expect("Expected capture access")
+            };
+
+            let wgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                #[cfg(target_os = "windows")]
+                backends: wgpu::Backends::DX12,
+                #[cfg(target_os = "macos")]
+                backends: wgpu::Backends::METAL,
+                flags: wgpu::InstanceFlags::default(),
+                dx12_shader_compiler: wgpu::Dx12Compiler::default(),
+                gles_minor_version: wgpu::Gles3MinorVersion::default(),
+            });
+            let wgpu_adapter = wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            }).await.expect("Expected wgpu adapter");
+            let (wgpu_device, wgpu_queue) = wgpu_adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("wgpu adapter"),
+                required_features: wgpu::Features::default(),
+                required_limits: wgpu::Limits::default(),
+            }, None).await.expect("Expected wgpu device");
+            let gfx = Arc::new(Gfx {
+                device: wgpu_device,
+                queue: wgpu_queue,
+            });
+
+            let filter = CapturableContentFilter { windows: None, displays: true };
+            let content = CapturableContent::new(filter).await.unwrap();
+            let display = content.displays().next()
+                .expect("Expected at least one capturable display");
+            let config = CaptureConfig::with_display(display, CapturePixelFormat::Bgra8888)
+                .with_wgpu_device(gfx.clone())
+                .expect("Expected config with wgpu device");
+
+            let mut stream = CaptureStream::new(token, config, |result| {
+                println!("result: {:?}", result);
+                if let Ok(StreamEvent::Video(frame)) = result {
+                    let frame_id = frame.frame_id();
+
+                    match frame.get_metal_texture(MetalVideoFramePlaneTexture::Rgba) {
+                        Ok(texture) => {
+                            SCREEN_TEXTURE.lock().unwrap().replace(Frame {
+                                frame_texture: texture,
+                                frame_id,
+                            });
+                        }
+                        Err(e) => {
+                            println!("Bitmap error: {:?}", e);
+                        }
+                    }
+                }
+            }).unwrap();
+            let _ = ManuallyDrop::new(stream);
+
+            // tokio::time::sleep(Duration::from_millis(20000000)).await;
+            //
+            // stream.stop().unwrap();
+        });
+        let _ = ManuallyDrop::new(runtime);
+
         let rerun_logo =
             image::load_from_memory(include_bytes!("logo_dark_mode.png")).unwrap();
 
@@ -279,17 +345,13 @@ impl framework::Example for Render2D {
 
         let texture = if let Some(texture) = SCREEN_TEXTURE.lock().unwrap().as_ref() {
             puffin::profile_scope!("screen texture");
-            let Frame { frame_bitmap, .. } = texture;
-            let screen_texture = re_ctx.texture_manager_2d.create(
+            let Frame { frame_texture, .. } = texture;
+            let screen_texture = re_ctx.texture_manager_2d.create_from_metal_texture(
+                "screen texture",
                 &re_ctx.gpu_resources.textures,
-                &Texture2DCreationDesc {
-                    label: "screen texture".into(),
-                    data: Cow::Owned(frame_bitmap.data.iter().flatten().copied().collect::<Vec<_>>()),
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    width: frame_bitmap.width as u32,
-                    height: frame_bitmap.height as u32,
-                },
+                frame_texture.clone(),
             ).unwrap();
+
             screen_texture
         } else {
             self.rerun_logo_texture.clone()
@@ -309,25 +371,6 @@ impl framework::Example for Render2D {
                     options: RectangleOptions {
                         texture_filter_magnification: TextureFilterMag::Nearest,
                         texture_filter_minification: TextureFilterMin::Linear,
-                        ..Default::default()
-                    },
-                },
-                TexturedRect {
-                    top_left_corner_position: glam::vec3(
-                        500.0,
-                        // Intentionally overlap pictures to illustrate z-fighting resolution
-                        170.0 + self.rerun_logo_texture_height as f32 * image_scale * 0.25,
-                        -0.05,
-                    ),
-                    extent_u: self.rerun_logo_texture_width as f32 * image_scale * glam::Vec3::X,
-                    extent_v: self.rerun_logo_texture_height as f32 * image_scale * glam::Vec3::Y,
-                    colormapped_texture: ColormappedTexture::from_unorm_rgba(
-                        self.rerun_logo_texture.clone(),
-                    ),
-                    options: RectangleOptions {
-                        texture_filter_magnification: TextureFilterMag::Linear,
-                        texture_filter_minification: TextureFilterMin::Linear,
-                        depth_offset: 1,
                         ..Default::default()
                     },
                 },
@@ -415,82 +458,10 @@ impl framework::Example for Render2D {
 }
 
 fn main() {
-    let server_addr = format!("127.0.0.1:{}", puffin_http::DEFAULT_PORT);
+    let server_addr = format!("127.0.0.1:{}", 7901);
     let _puffin_server = puffin_http::Server::new(&server_addr).unwrap();
     eprintln!("Run this to view profiling data:  puffin_viewer {server_addr}");
     puffin::set_scopes_on(true);
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
-
-    runtime.spawn(async {
-        let token = match CaptureStream::test_access(false) {
-            Some(token) => token,
-            None => CaptureStream::request_access(false).await.expect("Expected capture access")
-        };
-
-        let wgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            #[cfg(target_os = "windows")]
-            backends: wgpu::Backends::DX12,
-            #[cfg(target_os = "macos")]
-            backends: wgpu::Backends::METAL,
-            flags: wgpu::InstanceFlags::default(),
-            dx12_shader_compiler: wgpu::Dx12Compiler::default(),
-            gles_minor_version: wgpu::Gles3MinorVersion::default(),
-        });
-        let wgpu_adapter = wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::None,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        }).await.expect("Expected wgpu adapter");
-        let (wgpu_device, wgpu_queue) = wgpu_adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("wgpu adapter"),
-            required_features: wgpu::Features::default(),
-            required_limits: wgpu::Limits::default(),
-        }, None).await.expect("Expected wgpu device");
-        let gfx = Arc::new(Gfx {
-            device: wgpu_device,
-            queue: wgpu_queue,
-        });
-
-        let filter = CapturableContentFilter { windows: None, displays: true };
-        let content = CapturableContent::new(filter).await.unwrap();
-        let display = content.displays().next()
-            .expect("Expected at least one capturable display");
-        let config = CaptureConfig::with_display(display, CapturePixelFormat::Bgra8888)
-            .with_wgpu_device(gfx.clone())
-            .expect("Expected config with wgpu device");
-
-        let mut stream = CaptureStream::new(token, config, |result| {
-            println!("result: {:?}", result);
-            if let Ok(StreamEvent::Video(frame)) = result {
-                let frame_id = frame.frame_id();
-
-                match frame.get_bitmap() {
-                    Ok(bitmap) => {
-                        match bitmap {
-                            crabgrab::feature::bitmap::FrameBitmap::BgraUnorm8x4(frame) => {
-                                println!("format: BgraUnorm8x4");
-                                SCREEN_TEXTURE.lock().unwrap().replace(Frame {
-                                    frame_bitmap: frame,
-                                    frame_id,
-                                });
-                            }
-                            crabgrab::feature::bitmap::FrameBitmap::RgbaUnormPacked1010102(_) => println!("format: RgbaUnormPacked1010102"),
-                            crabgrab::feature::bitmap::FrameBitmap::RgbaF16x4(_) => println!("format: RgbaF16x4"),
-                            crabgrab::feature::bitmap::FrameBitmap::YCbCr(_) => println!("format: YCbCr"),
-                        }
-                    }
-                    Err(e) => {
-                        println!("Bitmap error: {:?}", e);
-                    }
-                }
-            }
-        }).unwrap();
-        let _ = ManuallyDrop::new(stream);
-
-        // tokio::time::sleep(Duration::from_millis(20000000)).await;
-        //
-        // stream.stop().unwrap();
-    });
 
     framework::start::<Render2D>();
 }

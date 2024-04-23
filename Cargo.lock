@@ -2116,9 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "re_build_tools"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88dd6c26a72f68dd437dcbb462dc4fd5b6ab439f41f2dce2a12b95300266f725"
+version = "0.16.0-alpha.1+dev"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -2131,15 +2129,11 @@ dependencies = [
 
 [[package]]
 name = "re_error"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a561ff5a4cdf5bc37c03f62fd78f618326c4cb0b10d2d7a062b33490bf9d630"
+version = "0.16.0-alpha.1+dev"
 
 [[package]]
 name = "re_log"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35056426bb497a2bd30ec54f1aac35f32c6b0f2cd64fd833509ebb1e4be19f11"
+version = "0.16.0-alpha.1+dev"
 dependencies = [
  "log",
  "log-once",
@@ -2157,6 +2151,7 @@ dependencies = [
  "image",
  "itertools",
  "macaw",
+ "metal",
  "once_cell",
  "pollster",
  "puffin",
@@ -2173,9 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "re_renderer"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2902018a22e9cb535737582bc2c26e8e4939d0b24a5cd404c61919739e1f6d61"
+version = "0.16.0-alpha.1+dev"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2194,6 +2187,7 @@ dependencies = [
  "half",
  "itertools",
  "macaw",
+ "metal",
  "never",
  "notify",
  "ordered-float",
@@ -2219,9 +2213,7 @@ dependencies = [
 
 [[package]]
 name = "re_tracing"
-version = "0.15.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61ca94b1087b377bde7e109c969b381c38d9a5a93a8265635a18aa3b341a5250"
+version = "0.16.0-alpha.1+dev"
 dependencies = [
  "puffin",
 ]
